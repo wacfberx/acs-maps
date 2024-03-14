@@ -1,0 +1,278 @@
+---
+title: "US Energy"
+output: html_document
+date: '2022-12-19'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r cars}
+
+library(readr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(ggthemes)
+library(scales)
+library(tidyverse)
+library(wesanderson) # Provides Wes Anderson Palette
+library(extrafont)
+library(maps)     # Provides latitude and longitude data for various maps
+library(viridis)
+
+df = read_csv("Energy Census and Economic Data US 2010-2014.csv") 
+
+columns_delete = c("GDP2010Q1", "GDP2010Q2", "GDP2010Q3", "GDP2010Q4","GDP2011Q1", "GDP2011Q2","GDP2011Q3", "GDP2011Q4","GDP2012Q1", "GDP2012Q2","GDP2012Q3", "GDP2012Q4","GDP2013Q1", "GDP2013Q2", "GDP2013Q3", "GDP2013Q4", "GDP2014Q1", "GDP2014Q2","GDP2014Q3", "GDP2014Q4")
+
+rep_str = c("10-11" = "_change2010", "11-12" = "_change2011", "12-13" = "_change2012", "13-14" = "_change2013")
+
+df = df %>%
+  rename(Great_Lakes = `Great Lakes`) %>%
+  pivot_longer(
+    cols =  -c(StateCodes, State, Region, Division, Coast, Great_Lakes),
+    names_to = "Variable",
+    values_to = "Values",
+    values_drop_na = TRUE) %>%
+  filter(!(Variable %in% columns_delete)) %>% 
+  mutate(Variable = str_replace(Variable, "CENSUS2010POP", "POPCENSUS2010")) %>%
+  mutate(Variable = str_replace_all(Variable, rep_str)) %>%
+  mutate(Year = extract_numeric(Variable)) %>%
+  mutate(Variable = str_replace_all(Variable, "[:digit:]", "")) %>%
+  relocate(Year, .after = Variable) 
+
+# Check for number of rows with NA values
+df %>% summarise(across(everything(), ~ sum(is.na(.))))
+
+# Check for actual rows
+df %>% 
+  filter(if_any(everything(), is.na))
+```
+
+# Some Analysis
+
+```{r pressure, echo=FALSE}
+
+# https://github.com/karthik/wesanderson
+
+# Average Values Per State of GDP
+df %>%
+  group_by(State, Variable) %>%
+  filter(Variable == "GDP", State != "United States") %>%
+  summarise(average = mean(Values)) %>%
+  arrange(desc(average)) %>%
+  ggplot(aes(x=average, y=State)) + 
+    geom_bar(stat = "identity")
+  
+
+# Average GDP Per Region over 2010-2014
+
+df1 = df %>%
+  mutate(Region = case_when(
+    Region == 1 ~ "Northeast",
+    Region == 2 ~ "Midwest",
+    Region == 3 ~ "South",
+    Region == 4 ~ "West",
+    is.na(Region) ~ "United States")) %>%
+  group_by(Region) %>%
+  filter(Variable == "GDP", State != "United States") %>%
+  summarise(average = round(mean(Values),0)) %>%
+  arrange(desc(average)) 
+
+
+library(showtext)
+## Loading Google fonts (https://fonts.google.com/)
+font_add_google("Gochi Hand", "gochi")
+font_add_google("Schoolbell", "bell")
+font_add_google("Jost", "jost")
+
+
+## Automatically use showtext to render text
+showtext_auto()
+
+a <- df1 %>%
+  ggplot(aes(x= Region, y = average, fill = Region)) + 
+  geom_bar(stat = "identity") + 
+  geom_text(aes(label=average), vjust=3, color="white", size=5, family = "jost") +
+  labs(title = "Average GDP in U.S. Regions (2010-2014)",
+       subtitle = "How does GDP differ by region?") + 
+  ylab("GDP (in million USD)") + 
+  scale_fill_manual(values = wes_palette("Moonrise2")) + 
+  theme_fivethirtyeight() +
+  theme(text = element_text(family = "jost"),
+        axis.title = element_text(),
+        axis.text.y = element_blank(),
+        legend.position = "none")
+
+a
+
+```
+
+
+## GDP per region and divide by coastal states
+
+```{r}
+
+df3 = df %>%
+  mutate(Region = case_when(
+    Region == 1 ~ "Northeast",
+    Region == 2 ~ "Midwest",
+    Region == 3 ~ "South",
+    Region == 4 ~ "West",
+    is.na(Region) ~ "United States")) %>%
+  filter(Variable == "GDP", State != "United States", Year == 2013) %>%
+  mutate(Coast = as.character(Coast)) %>%
+  select(Region, Coast, Values) %>%
+  group_by(Region, Coast) %>%
+  summarise(Values = sum(Values)) %>%
+  mutate(Coast = case_when(
+    Coast == 1 ~ "Yes",
+    Coast == 0 ~ "No")) 
+
+b <- df3 %>%
+  ggplot(aes(x= Region, y = round(Values, 0), fill = Coast)) + 
+  geom_bar(stat = "identity", position="stack") +
+  scale_fill_manual(values = wes_palette("Moonrise2")) + 
+  labs(title = "GDP Per Region in 2010",
+       subtitle = "How does GDP differ by coastal states?") + 
+  ylab("GDP (in million USD)") + 
+  theme_fivethirtyeight()  +
+  theme(text = element_text(family = "jost"),
+        axis.title = element_text(),
+        axis.text.y = element_blank())
+
+b
+
+```
+
+
+## Scatter Plot
+
+```{r}
+
+## GDP, RDEATH, and POPESTIMATED
+
+df_wide = df %>%
+  mutate(Region = case_when(
+    Region == 1 ~ "Northeast",
+    Region == 2 ~ "Midwest",
+    Region == 3 ~ "South",
+    Region == 4 ~ "West")) %>%
+  filter(Variable %in% c("GDP", "RDEATH", "RBIRTH", "POPESTIMATE"), State != "United States") %>%
+  filter(Year == 2011) %>%
+  select(State, Variable, Values, Region) %>%
+  pivot_wider(names_from = Variable, values_from = Values)
+
+w = df_wide %>%
+  ggplot(aes(x=log(GDP), y =RDEATH, size=POPESTIMATE, color = Region)) +
+  geom_point() + 
+  #geom_smooth(method=lm, se=FALSE, fullrange=TRUE) +
+  scale_color_manual(values = wes_palette("Moonrise2")) + 
+  labs(title = "GDP vs Death Rate",
+       subtitle = "Sized by Estimated Population Size in 2011") + 
+  xlab("GDP (in million USD)") + 
+  ylab("Death Rate") +
+  theme_fivethirtyeight()  +
+  theme(text = element_text(family = "jost"),
+        axis.title = element_text()) +
+  scale_size(guide = "none")
+
+
+w
+
+
+y = df_wide %>%
+  ggplot(aes(x=RDEATH, y =RBIRTH, size=POPESTIMATE, color = Region)) +
+  geom_point() + 
+  geom_smooth(method=lm, se=FALSE, fullrange=TRUE) +
+  scale_color_manual(values = wes_palette("Moonrise2")) + 
+  labs(title = "Death Rate vs Birth Rate",
+       subtitle = "Sized by Estimated Population Size in 2011") + 
+  xlab("Death Rate") + 
+  ylab("Birth Rate") +
+  theme_fivethirtyeight() +
+  theme(text = element_text(family = "jost"),
+        axis.title = element_text()) +
+  scale_size(guide = "none")
+
+y 
+
+
+
+```
+
+### 
+```{r}
+
+# https://remiller1450.github.io/s230s19/Intro_maps.html
+
+# load United States state map data
+MainStates <- map_data("state") %>%
+  rename(State = region)
+
+df_wide = df_wide %>%
+  mutate(State = tolower(State))
+
+# Use the dplyr package to merge data frames
+df_choro = inner_join(MainStates, df_wide, by = "State")
+
+#plot all states with ggplot2, using black borders and light blue fill
+
+pal <- wes_palette("Moonrise2", 2, type = "continuous")
+
+t = df_choro %>%
+  ggplot() + 
+  geom_polygon(aes(x=long, y=lat, group=group, fill = GDP),
+                color="white", size = 0.2) +
+  labs(title="GDP in the Mainland United States in 2011") +
+  scale_fill_gradientn(colours = pal, labels = comma, name = "GDP (in millions)") +
+  theme_fivethirtyeight() + 
+  theme(text = element_text(family = "jost"),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        legend.position = "right",
+        legend.direction = "vertical",
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank()) 
+
+t
+
+```
+
+### Bump Plot for TotalC{year}: Total energy consumption in billion BTU in given year.
+
+```{r}
+
+# https://www.statology.org/bump-chart-in-r-using-ggplot2/
+
+df_bump = df %>%
+  filter(Variable == "TotalC", State != "United States") %>%
+  select(State, Variable, Year, Values) %>%
+  group_by(Year) %>%
+  arrange(Year, desc(Values), State, Variable) %>%
+  mutate(rank = row_number()) %>%
+  ungroup() %>% 
+  filter(rank %in% (6:10))
+
+
+n <- df_bump %>%
+ggplot(aes(x = Year, y = rank, group = State)) +
+  geom_line(aes(color = State, alpha = 1.5), size = 2) +
+  geom_point(aes(color = State, alpha = 1.5), size = 4) +
+  scale_y_reverse(breaks = 1:nrow(df_bump)) +
+  labs(title="State Total Energy Consumption by Ranking") +
+  theme_fivethirtyeight() + 
+  theme(text = element_text(family = "jost"),
+        legend.position = "right",
+        legend.direction = "vertical",
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank()) +
+  guides(alpha = "none") 
+
+n
+
+```
+
+
